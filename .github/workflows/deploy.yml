@@ -15,15 +15,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      CI: "true"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
 
-      - run: npm ci
-      - run: npm run build
+      - name: Print versions
+        run: |
+          node -v
+          npm -v
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
 
       - uses: actions/upload-pages-artifact@v3
         with:
