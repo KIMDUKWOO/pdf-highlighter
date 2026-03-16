@@ -41,8 +41,8 @@ function getColor(name) {
   return map[name] || map.green;
 }
 
-function cloneUint8Array(src) {
-  return new Uint8Array(src);
+function cloneBytes(srcUint8) {
+  return srcUint8.slice();
 }
 
 pdfInput.addEventListener("change", (e) => {
@@ -105,13 +105,16 @@ runBtn.addEventListener("click", async () => {
 
     log("PDF 로딩 중...");
 
-    // 같은 ArrayBuffer를 재사용하지 않도록 복사본 2개 생성
     const originalPdfBuffer = await pdfFile.arrayBuffer();
-    const pdfBytesForPdfJs = cloneUint8Array(originalPdfBuffer);
-    const pdfBytesForPdfLib = cloneUint8Array(originalPdfBuffer);
+    const originalPdfBytes = new Uint8Array(originalPdfBuffer);
 
-    const loadingTask = pdfjsLib.getDocument({ data: pdfBytesForPdfJs });
-    const pdfJsDoc = await loadingTask.promise;
+    // 진짜 독립 복사본
+    const pdfBytesForPdfJs = cloneBytes(originalPdfBytes);
+    const pdfBytesForPdfLib = cloneBytes(originalPdfBytes);
+
+    const pdfJsDoc = await pdfjsLib.getDocument({
+      data: pdfBytesForPdfJs,
+    }).promise;
 
     const pdfLibDoc = await PDFDocument.load(pdfBytesForPdfLib);
 
@@ -149,7 +152,6 @@ runBtn.addEventListener("click", async () => {
           totalMatches += matches.length;
           log(`  - ${label} "${keyword}" : ${matches.length}건`);
 
-          // 현재는 임시 표시용 마킹
           const markerY = pageHeight - 40 - (totalMatches % 20) * 16;
 
           pdfPage.drawRectangle({
