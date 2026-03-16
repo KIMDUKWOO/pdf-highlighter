@@ -2,52 +2,36 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-
-  <!-- 모바일 대응 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
   <title>PDF 키워드 하이라이터</title>
-
-  <!-- 스타일 -->
   <link rel="stylesheet" href="/src/style.css" />
-
-  <!-- Vite JS 진입점 -->
   <script type="module" src="/src/main.js"></script>
 </head>
-
 <body>
-
   <h1>PDF 키워드 하이라이터</h1>
 
-  <!-- PDF 선택 -->
   <div class="box">
     <label>PDF 파일 선택</label>
     <input type="file" id="pdfFile" accept="application/pdf" />
   </div>
 
-  <!-- Excel 선택 -->
   <div class="box">
     <label>엑셀 파일 선택 (.xlsx)</label>
     <input type="file" id="excelFile" accept=".xlsx" />
   </div>
 
-  <!-- 옵션 -->
   <div class="box">
     <label>옵션</label>
-
     <div class="option">
       <input type="checkbox" id="ignoreCase" checked />
       <label for="ignoreCase">대소문자 무시</label>
     </div>
-
     <div class="option">
       <input type="checkbox" id="wholeWord" />
       <label for="wholeWord">단어 단위 매칭</label>
     </div>
-
     <div class="option">
       <label for="bColor">B열 하이라이트 색상</label>
-
       <select id="bColor">
         <option value="green">연두(기본)</option>
         <option value="blue">하늘색</option>
@@ -58,15 +42,17 @@
     </div>
   </div>
 
-  <!-- 실행 버튼 -->
-  <div class="box">
+  <div class="box row">
     <button id="runBtn" disabled>하이라이트 실행</button>
+    <button id="cancelBtn" disabled>취소</button>
   </div>
 
-  <!-- 로그 -->
+  <div class="box">
+    <progress id="progressBar" max="100" value="0"></progress>
+    <div id="progressText">대기 중...</div>
+  </div>
+
   <h3>로그</h3>
-
   <pre id="log"></pre>
-
 </body>
 </html>
