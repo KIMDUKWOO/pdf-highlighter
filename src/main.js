@@ -43,8 +43,7 @@ function cloneBytes(srcUint8) {
 
 function normalizeChar(ch) {
   if (!ch) return "";
-
-  const quoteMap = {
+  const map = {
     "‘": "'",
     "’": "'",
     "‚": "'",
@@ -55,7 +54,6 @@ function normalizeChar(ch) {
     "´": "'",
     "ʹ": "'",
     "ˈ": "'",
-    "˝": '"',
     "“": '"',
     "”": '"',
     "„": '"',
@@ -65,26 +63,19 @@ function normalizeChar(ch) {
     "–": "-",
     "—": "-",
     "−": "-",
-    "-": "-",
     "‒": "-",
     "﹣": "-",
     "－": "-",
   };
-
-  if (quoteMap[ch]) return quoteMap[ch];
+  if (map[ch]) return map[ch];
   if (/\s/.test(ch)) return " ";
-
   return ch;
 }
 
 function normalizeText(text, ignoreCase = true) {
   let out = "";
-  for (const ch of String(text || "")) {
-    out += normalizeChar(ch);
-  }
-
+  for (const ch of String(text || "")) out += normalizeChar(ch);
   out = out.replace(/\s+/g, " ").trim();
-
   if (ignoreCase) out = out.toLowerCase();
   return out;
 }
@@ -99,69 +90,71 @@ function isBoundary(text, start, end) {
   return !isWordChar(prev) && !isWordChar(next);
 }
 
-function getTextItemBox(item, viewportHeight) {
-  const t = item.transform;
-  const x = t[4];
-  const yTop = t[5];
-  const width = item.width || 0;
-  const height = Math.abs(item.height || t[0] || 10);
+function getTextItemInfo(item, viewportHeight) {
+  const [a, b, c, d, e, f] = item.transform;
+  const width = Math.max(item.width || 0, 1);
+  const height = Math.max(Math.abs(item.height || d || 8), 1);
+
+  const angle = Math.atan2(b, a) * 180 / Math.PI;
+  const normalizedAngle = ((angle % 360) + 360) % 360;
+
+  const horizontal =
+    normalizedAngle < 15 ||
+    normalizedAngle > 345 ||
+    (normalizedAngle > 165 && normalizedAngle < 195);
+
+  const x = e;
+  const yTop = f;
 
   return {
+    str: item.str || "",
     x,
     yTop,
     width,
     height,
-    // pdf-lib 좌표계(bottom-left origin)로 변환
     pdfY: viewportHeight - yTop - height,
+    angle: normalizedAngle,
+    horizontal,
   };
 }
 
-function groupItemsIntoLines(items, viewportHeight) {
-  const usable = items
-    .filter((it) => typeof it.str === "string" && it.str.length > 0)
-    .map((it, idx) => {
-      const box = getTextItemBox(it, viewportHeight);
-      return {
-        rawIndex: idx,
-        str: it.str,
-        x: box.x,
-        yTop: box.yTop,
-        width: box.width,
-        height: box.height,
-        pdfY: box.pdfY,
-      };
-    });
+function buildHorizontalLines(items, viewportHeight) {
+  const parsed = items
+    .filter((it) => typeof it.str === "string" && it.str.trim() !== "")
+    .map((it) => getTextItemInfo(it, viewportHeight))
+    .filter((it) => it.horizontal);
 
-  usable.sort((a, b) => {
+  parsed.sort((a, b) => {
     const dy = Math.abs(a.yTop - b.yTop);
     if (dy > 2) return a.yTop - b.yTop;
     return a.x - b.x;
   });
 
   const lines = [];
-  for (const item of usable) {
-    let found = null;
-    for (const line of lines) {
-      const tolerance = Math.max(2, line.avgHeight * 0.5);
-      if (Math.abs(line.yTop - item.yTop) <= tolerance) {
-        found = line;
+
+  for (const item of parsed) {
+    let line = null;
+
+    for (const existing of lines) {
+      const tol = Math.max(2, existing.avgHeight * 0.45);
+      if (Math.abs(existing.yTop - item.yTop) <= tol) {
+        line = existing;
         break;
       }
     }
 
-    if (!found) {
-      found = {
+    if (!line) {
+      line = {
         yTop: item.yTop,
-        avgHeight: item.height || 10,
+        avgHeight: item.height,
         items: [],
       };
-      lines.push(found);
+      lines.push(line);
     }
 
-    found.items.push(item);
-    found.avgHeight =
-      (found.avgHeight * (found.items.length - 1) + (item.height || 10)) /
-      found.items.length;
+    line.items.push(item);
+    line.avgHeight =
+      (line.avgHeight * (line.items.length - 1) + item.height) / line.items.length;
   }
 
   for (const line of lines) {
@@ -169,56 +162,6 @@ function groupItemsIntoLines(items, viewportHeight) {
   }
 
   return lines;
-}
-
-function buildSearchableLine(lineItems, ignoreCase) {
-  let text = "";
-  const charMap = [];
-
-  for (let i = 0; i < lineItems.length; i++) {
-    const item = lineItems[i];
-    const prev = i > 0 ? lineItems[i - 1] : null;
-
-    if (prev) {
-      const prevRight = prev.x + prev.width;
-      const gap = item.x - prevRight;
-      const threshold = Math.max(1.5, Math.min(prev.height, item.height) * 0.15);
-
-      if (gap > threshold) {
-        text += " ";
-        charMap.push(-1);
-      }
-    }
-
-    const normalized = normalizeText(item.str, ignoreCase);
-
-    for (const ch of normalized) {
-      text += ch;
-      charMap.push(i);
-    }
-  }
-
-  return { text, charMap };
-}
-
-function findAllMatches(searchText, keyword, wholeWord) {
-  const matches = [];
-  if (!keyword || !searchText) return matches;
-
-  let fromIndex = 0;
-  while (fromIndex < searchText.length) {
-    const hit = searchText.indexOf(keyword, fromIndex);
-    if (hit === -1) break;
-
-    const end = hit + keyword.length;
-    if (!wholeWord || isBoundary(searchText, hit, end)) {
-      matches.push({ start: hit, end });
-    }
-
-    fromIndex = hit + 1;
-  }
-
-  return matches;
 }
 
 function rectFromItem(item) {
@@ -230,73 +173,30 @@ function rectFromItem(item) {
   };
 }
 
-function mergeRects(rects) {
-  if (!rects.length) return [];
+function drawRect(pdfPage, rect, color) {
+  // 비정상적으로 긴 세로 박스 방지
+  if (rect.height > rect.width * 6 && rect.height > 40) {
+    return;
+  }
 
-  const sorted = [...rects].sort((a, b) => {
-    const dy = Math.abs(a.y - b.y);
-    if (dy > 2) return b.y - a.y;
-    return a.x - b.x;
+  pdfPage.drawRectangle({
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    color,
+    opacity: 0.35,
+    borderWidth: 0,
   });
-
-  const merged = [sorted[0]];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const cur = sorted[i];
-    const last = merged[merged.length - 1];
-
-    const sameLine = Math.abs(cur.y - last.y) <= Math.max(2, Math.min(cur.height, last.height) * 0.5);
-    const close = cur.x <= last.x + last.width + 3;
-
-    if (sameLine && close) {
-      const newRight = Math.max(last.x + last.width, cur.x + cur.width);
-      const newTop = Math.max(last.y + last.height, cur.y + cur.height);
-      last.x = Math.min(last.x, cur.x);
-      last.y = Math.min(last.y, cur.y);
-      last.width = newRight - last.x;
-      last.height = newTop - last.y;
-    } else {
-      merged.push({ ...cur });
-    }
-  }
-
-  return merged;
 }
 
-function getRectsForMatch(lineItems, charMap, match) {
-  const itemIndexes = new Set();
-
-  for (let i = match.start; i < match.end; i++) {
-    const idx = charMap[i];
-    if (idx >= 0) itemIndexes.add(idx);
-  }
-
-  const rects = [...itemIndexes]
-    .sort((a, b) => a - b)
-    .map((idx) => rectFromItem(lineItems[idx]));
-
-  return mergeRects(rects);
-}
-
-function drawHighlightRects(pdfPage, rects, color) {
-  for (const r of rects) {
-    pdfPage.drawRectangle({
-      x: r.x,
-      y: r.y,
-      width: r.width,
-      height: r.height,
-      color,
-      opacity: 0.35,
-      borderWidth: 0,
-    });
+function drawRects(pdfPage, rects, color) {
+  for (const rect of rects) {
+    drawRect(pdfPage, rect, color);
   }
 }
 
 function readKeywordsFromWorkbook(workbook) {
-  if (!workbook.SheetNames.length) {
-    throw new Error("엑셀 시트를 찾을 수 없습니다.");
-  }
-
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
@@ -313,7 +213,6 @@ function readKeywordsFromWorkbook(workbook) {
       seenA.add(a);
       aKeywords.push(a);
     }
-
     if (b && !seenB.has(b)) {
       seenB.add(b);
       bKeywords.push(b);
@@ -321,6 +220,82 @@ function readKeywordsFromWorkbook(workbook) {
   }
 
   return { aKeywords, bKeywords };
+}
+
+function findItemExactMatches(lineItems, keywordNorm, wholeWord, ignoreCase) {
+  const hits = [];
+
+  for (const item of lineItems) {
+    const norm = normalizeText(item.str, ignoreCase);
+    if (!norm) continue;
+
+    if (norm === keywordNorm) {
+      if (!wholeWord || isBoundary(` ${norm} `, 1, 1 + norm.length)) {
+        hits.push([item]);
+      }
+    }
+  }
+
+  return hits;
+}
+
+function findMultiItemMatches(lineItems, keywordNorm, wholeWord, ignoreCase) {
+  const hits = [];
+
+  for (let start = 0; start < lineItems.length; start++) {
+    let combined = "";
+    const picked = [];
+
+    for (let end = start; end < lineItems.length; end++) {
+      const item = lineItems[end];
+      const itemNorm = normalizeText(item.str, ignoreCase);
+      if (!itemNorm) continue;
+
+      if (picked.length > 0) {
+        const prev = picked[picked.length - 1];
+        const gap = item.x - (prev.x + prev.width);
+        const gapLimit = Math.max(8, Math.min(prev.height, item.height) * 0.8);
+
+        // 너무 멀면 같은 문자열로 보지 않음
+        if (gap > gapLimit) break;
+
+        // 하이픈 계열/공백 허용
+        if (gap > 1.5) combined += " ";
+      }
+
+      combined += itemNorm;
+      picked.push(item);
+
+      const compactCombined = combined.replace(/\s+/g, "");
+      const compactKeyword = keywordNorm.replace(/\s+/g, "");
+
+      if (compactCombined.length > compactKeyword.length + 6) break;
+
+      if (compactCombined === compactKeyword) {
+        if (!wholeWord || isBoundary(` ${compactCombined} `, 1, 1 + compactCombined.length)) {
+          hits.push([...picked]);
+        }
+        break;
+      }
+    }
+  }
+
+  return hits;
+}
+
+function removeDuplicateHits(hitGroups) {
+  const seen = new Set();
+  const result = [];
+
+  for (const group of hitGroups) {
+    const key = group.map((it) => `${it.x.toFixed(2)}|${it.yTop.toFixed(2)}|${it.str}`).join("||");
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(group);
+    }
+  }
+
+  return result;
 }
 
 pdfInput.addEventListener("change", (e) => {
@@ -362,91 +337,63 @@ runBtn.addEventListener("click", async () => {
     const pdfBytesForPdfJs = cloneBytes(originalPdfBytes);
     const pdfBytesForPdfLib = cloneBytes(originalPdfBytes);
 
-    const pdfJsDoc = await pdfjsLib.getDocument({
-      data: pdfBytesForPdfJs,
-    }).promise;
-
+    const pdfJsDoc = await pdfjsLib.getDocument({ data: pdfBytesForPdfJs }).promise;
     const pdfLibDoc = await PDFDocument.load(pdfBytesForPdfLib);
-
-    log(`PDF 페이지 수: ${pdfJsDoc.numPages}`);
-    log("정확 좌표 검색 시작...");
 
     const ignoreCase = ignoreCaseEl.checked;
     const wholeWord = wholeWordEl.checked;
-    const bColor = getColor(bColorEl.value);
     const aColor = rgb(1, 1, 0);
+    const bColor = getColor(bColorEl.value);
 
-    const normalizedA = aKeywords.map((k) => ({
-      raw: k,
-      norm: normalizeText(k, ignoreCase),
-    })).filter((x) => x.norm);
-
-    const normalizedB = bKeywords.map((k) => ({
-      raw: k,
-      norm: normalizeText(k, ignoreCase),
-    })).filter((x) => x.norm);
+    const groups = [
+      {
+        label: "A",
+        color: aColor,
+        keywords: aKeywords.map((raw) => ({ raw, norm: normalizeText(raw, ignoreCase) })).filter((k) => k.norm),
+      },
+      {
+        label: "B",
+        color: bColor,
+        keywords: bKeywords.map((raw) => ({ raw, norm: normalizeText(raw, ignoreCase) })).filter((k) => k.norm),
+      },
+    ];
 
     let totalMatches = 0;
-    const keywordStats = new Map();
-
-    for (const k of normalizedA) keywordStats.set(`A:${k.raw}`, 0);
-    for (const k of normalizedB) keywordStats.set(`B:${k.raw}`, 0);
 
     for (let pageIndex = 0; pageIndex < pdfJsDoc.numPages; pageIndex++) {
       log(`페이지 ${pageIndex + 1}/${pdfJsDoc.numPages} 처리 중...`);
 
       const page = await pdfJsDoc.getPage(pageIndex + 1);
-      const viewport = page.getViewport({ scale: 1.0 });
+      const viewport = page.getViewport({ scale: 1 });
       const textContent = await page.getTextContent();
+      const lines = buildHorizontalLines(textContent.items || [], viewport.height);
       const pdfPage = pdfLibDoc.getPage(pageIndex);
 
-      const lines = groupItemsIntoLines(textContent.items || [], viewport.height);
+      for (const group of groups) {
+        for (const kw of group.keywords) {
+          const allHits = [];
 
-      for (const line of lines) {
-        const { text, charMap } = buildSearchableLine(line.items, ignoreCase);
-        if (!text) continue;
+          for (const line of lines) {
+            const exactHits = findItemExactMatches(line.items, kw.norm, wholeWord, ignoreCase);
+            const multiHits = exactHits.length
+              ? []
+              : findMultiItemMatches(line.items, kw.norm, wholeWord, ignoreCase);
 
-        for (const kw of normalizedA) {
-          const matches = findAllMatches(text, kw.norm, wholeWord);
-          if (!matches.length) continue;
-
-          for (const match of matches) {
-            const rects = getRectsForMatch(line.items, charMap, match);
-            drawHighlightRects(pdfPage, rects, aColor);
-            totalMatches += 1;
-            keywordStats.set(`A:${kw.raw}`, (keywordStats.get(`A:${kw.raw}`) || 0) + 1);
+            allHits.push(...exactHits, ...multiHits);
           }
-        }
 
-        for (const kw of normalizedB) {
-          const matches = findAllMatches(text, kw.norm, wholeWord);
-          if (!matches.length) continue;
+          const uniqueHits = removeDuplicateHits(allHits);
 
-          for (const match of matches) {
-            const rects = getRectsForMatch(line.items, charMap, match);
-            drawHighlightRects(pdfPage, rects, bColor);
+          for (const hit of uniqueHits) {
+            const rects = hit.map(rectFromItem);
+            drawRects(pdfPage, rects, group.color);
             totalMatches += 1;
-            keywordStats.set(`B:${kw.raw}`, (keywordStats.get(`B:${kw.raw}`) || 0) + 1);
           }
         }
       }
     }
-
-    const topHits = [...keywordStats.entries()]
-      .filter(([, count]) => count > 0)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 20);
 
     log(`총 매칭 수: ${totalMatches}`);
-    if (topHits.length) {
-      log("상위 매칭:");
-      for (const [name, count] of topHits) {
-        log(`- ${name} : ${count}`);
-      }
-    } else {
-      log("매칭된 키워드가 없습니다.");
-    }
-
     log("PDF 저장 중...");
 
     const resultBytes = await pdfLibDoc.save();
