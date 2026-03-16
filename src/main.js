@@ -41,6 +41,10 @@ function getColor(name) {
   return map[name] || map.green;
 }
 
+function cloneUint8Array(src) {
+  return new Uint8Array(src);
+}
+
 pdfInput.addEventListener("change", (e) => {
   pdfFile = e.target.files[0] || null;
   runBtn.disabled = !(pdfFile && excelFile);
@@ -85,6 +89,7 @@ runBtn.addEventListener("click", async () => {
         seenA.add(a);
         aKeywords.push(a);
       }
+
       if (b && !seenB.has(b)) {
         seenB.add(b);
         bKeywords.push(b);
@@ -100,9 +105,15 @@ runBtn.addEventListener("click", async () => {
 
     log("PDF 로딩 중...");
 
-    const pdfBytes = await pdfFile.arrayBuffer();
-    const pdfJsDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
-    const pdfLibDoc = await PDFDocument.load(pdfBytes);
+    // 같은 ArrayBuffer를 재사용하지 않도록 복사본 2개 생성
+    const originalPdfBuffer = await pdfFile.arrayBuffer();
+    const pdfBytesForPdfJs = cloneUint8Array(originalPdfBuffer);
+    const pdfBytesForPdfLib = cloneUint8Array(originalPdfBuffer);
+
+    const loadingTask = pdfjsLib.getDocument({ data: pdfBytesForPdfJs });
+    const pdfJsDoc = await loadingTask.promise;
+
+    const pdfLibDoc = await PDFDocument.load(pdfBytesForPdfLib);
 
     log(`PDF 페이지 수: ${pdfJsDoc.numPages}`);
     log("텍스트 검색 시작...");
@@ -118,10 +129,9 @@ runBtn.addEventListener("click", async () => {
 
       const page = await pdfJsDoc.getPage(pageIndex + 1);
       const textContent = await page.getTextContent();
-
       const items = textContent.items || [];
-      const pageText = items.map((item) => item.str || "").join(" ");
 
+      const pageText = items.map((item) => item.str || "").join(" ");
       const pdfPage = pdfLibDoc.getPage(pageIndex);
       const pageHeight = pdfPage.getHeight();
 
@@ -139,7 +149,8 @@ runBtn.addEventListener("click", async () => {
           totalMatches += matches.length;
           log(`  - ${label} "${keyword}" : ${matches.length}건`);
 
-          let markerY = pageHeight - 40 - (totalMatches % 20) * 16;
+          // 현재는 임시 표시용 마킹
+          const markerY = pageHeight - 40 - (totalMatches % 20) * 16;
 
           pdfPage.drawRectangle({
             x: 30,
@@ -168,7 +179,7 @@ runBtn.addEventListener("click", async () => {
     a.download = pdfFile.name.replace(/\.pdf$/i, "") + "_highlighted.pdf";
     a.click();
 
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 
     log("완료!");
   } catch (err) {
